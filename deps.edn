@@ -1,0 +1,24 @@
+;; reload deps using shell = `clj -P`
+;; main = clj -M:run
+{:paths ["src" "target/classes"]
+ :deps {;; clojure
+        org.clojure/clojure {:mvn/version "1.12.6"}
+        org.clojure/core.async {:mvn/version "1.9.865"}
+
+        ;; server
+        ring/ring-core {:mvn/version "1.12.1"}
+        ring/ring-jetty-adapter {:mvn/version "1.12.1"}
+        ring/ring-defaults {:mvn/version "0.5.0"}
+        ring/ring-devel {:mvn/version "1.12.1"}
+        org.slf4j/slf4j-simple {:mvn/version "2.0.13"}
+
+        ;; template
+        hiccup/hiccup {:mvn/version "2.0.0"}
+        bidi/bidi {:mvn/version "2.1.6"}
+
+        ;; db
+        org.xerial/sqlite-jdbc {:mvn/version "3.20.0"}
+        org.clojure/java.jdbc {:mvn/version "0.7.0"}
+        clj-postgresql/clj-postgresql {:mvn/version "0.7.0"}
+        com.github.seancorfield/honeysql {:mvn/version "2.7.1479"}}
+ :aliases {:run {:main-opts ["-m" "main"]}}}
