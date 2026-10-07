@@ -3,7 +3,7 @@
   (:use util)
   (:require
    [clojure.pprint :refer [pprint]]
-   [clojure.string :refer [lower-case]]
+   [clojure.string :refer [lower-case join]]
    [ring.adapter.jetty :refer [run-jetty]]
    [ring.middleware.reload :refer [wrap-reload]]
    [hiccup.middleware :refer [wrap-base-url]]
@@ -17,9 +17,42 @@
    [ring.middleware.params :refer [wrap-params]]
    [ring.middleware.multipart-params :refer [wrap-multipart-params]]
    [clojure.core.async :refer [chan <!! >!! <! go-loop]]
-   ;; [clojure.java.jdbc :as jdbc]
-   ;; [clojure.java.io :as file]
-   ))
+   [clojure.java.jdbc :as jdbc]
+   [honey.sql :as sql]))
+
+(def ID_SIZE 6)
+
+(defn gen-id! []
+  (->> ID_SIZE
+       range
+       (map (fn [_] (rand-nth "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")))
+       join))
+
+(def db-spec {:dbtype "postgresql"
+              :dbname "test"
+              :host "localhost"
+              :user "root"
+              :password "root"
+              :ssl false})
+
+(defn db-do! [cmd]
+  (jdbc/db-do-commands db-spec (sql/format cmd)))
+
+
+(defn db-create-table! [table-name & columns]
+  (db-do! {:drop-table [[:if-exists table-name]]})
+  (db-do! {:create-table [table-name :if-not-exists]
+           :with-columns columns}))
+
+(defn db-reset! []
+  (db-create-table!
+   :files
+   [:id [:char ID_SIZE] :primary-key]
+   [:path [:varchar 255] :unique]))
+
+(defn db-insert-file! [& paths]
+  (db-do! {:insert-into :files
+           :values (map (fn [path] {:id (gen-id!), :path path}) paths)}))
 
 (defonce server (atom nil))
 
@@ -37,25 +70,25 @@
 
 (def routes
   ["/"
-   {""
-    {:get
-     {"" (fn [_]
-           {:status 200
-            :body [:div {:style "display: grid; justify-content: center;"}
-                   [:h1 "upload a file"]
-                   [:form {:method "POST"
-                           :action "/"
-                           :enctype "multipart/form-data"}
-                    (form/hidden-field "_method" "POST")
-                    (form/label "file" "file:")
-                    (form/file-upload "file")
-                    (form/submit-button "send!")]]})}
-     :post
-     {"" (fn [request]
-           (println "---")
-           (pprint (slurp (get-in request [:params "file" :tempfile])))
-           ;; (event-hook-out! [])
-           )}}}])
+   {:get
+    {"" (fn [_]
+          {:status 200
+           :body [:div {:style "display: grid; justify-content: center;"}
+                  [:h1 "upload a file"]
+                  [:form {:method "POST"
+                          :action "/"
+                          :enctype "multipart/form-data"}
+                   (form/hidden-field "_method" "POST")
+                   (form/label "file" "file:")
+                   (form/file-upload "file")
+                   (form/submit-button "send!")]]})}
+
+    :post
+    {"" (fn [request]
+          (println "---")
+          (pprint (slurp (get-in request [:params "file" :tempfile])))
+          ;; (event-hook-out! [])
+          )}}])
 
 (def app
   (-> routes
