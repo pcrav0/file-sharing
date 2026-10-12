@@ -16,11 +16,12 @@
    [ring.util.codec :refer [url-encode]]
    [ring.middleware.params :refer [wrap-params]]
    [ring.middleware.multipart-params :refer [wrap-multipart-params]]
-   [clojure.core.async :refer [chan <!! >!! <! go-loop]]
+   [clojure.core.async :refer [chan <!! >!! <! go-loop close!]]
    [clojure.java.jdbc :as jdbc]
    [honey.sql :as sql]))
 
 (def ID_SIZE 6)
+(def MAX_SIZE 1024)
 
 (defn gen-id! []
   (->> ID_SIZE
@@ -61,6 +62,14 @@
     (.stop)
     (.start)))
 
+(defn sha-256 ^String [^String s]
+  (->> s
+       (map byte)
+       byte-array
+       (.digest (java.security.MessageDigest/getInstance "SHA-256"))
+       (map (partial format "%02x"))
+       join))
+
 (def event-queue (chan 10))
 
 (defn event-hook-out! [event]
@@ -78,17 +87,22 @@
                   [:form {:method "POST"
                           :action "/"
                           :enctype "multipart/form-data"}
-                   (form/hidden-field "_method" "POST")
                    (form/label "file" "file:")
                    (form/file-upload "file")
                    (form/submit-button "send!")]]})}
 
     :post
     {"" (fn [request]
-          (println "---")
-          (pprint (slurp (get-in request [:params "file" :tempfile])))
-          ;; (event-hook-out! [])
-          )}}])
+          (let [params (get-in request [:params "file"])
+                name (:filename params)
+                size (:size params)]
+
+            (if (>= size MAX_SIZE)
+              {:status 200, :body "nunda"}
+              (let [contents (-> params :tempfile slurp)]
+                (println "---")
+                (pprint params)
+                (println (sha-256 contents))))))}}])
 
 (def app
   (-> routes
