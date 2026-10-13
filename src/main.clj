@@ -18,16 +18,11 @@
    [ring.middleware.multipart-params :refer [wrap-multipart-params]]
    [clojure.core.async :refer [chan <!! >!! <! go-loop close!]]
    [clojure.java.jdbc :as jdbc]
-   [honey.sql :as sql]))
+   [honey.sql :as sql]
+   [honey.sql.helpers :as hsql]))
 
-(def ID_SIZE 6)
+(def ID_SIZE 64) ;; sha-256
 (def MAX_SIZE 1024)
-
-(defn gen-id! []
-  (->> ID_SIZE
-       range
-       (map (fn [_] (rand-nth "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")))
-       join))
 
 (def db-spec {:dbtype "postgresql"
               :dbname "test"
@@ -37,7 +32,7 @@
               :ssl false})
 
 (defn db-do! [cmd]
-  (jdbc/db-do-commands db-spec (sql/format cmd)))
+  (jdbc/execute! db-spec (sql/format cmd)))
 
 
 (defn db-create-table! [table-name & columns]
@@ -49,11 +44,12 @@
   (db-create-table!
    :files
    [:id [:char ID_SIZE] :primary-key]
-   [:path [:varchar 255] :unique]))
+   [:name [:varchar 255] :unique]))
 
-(defn db-insert-file! [& paths]
+(defn db-insert-file! [id name]
   (db-do! {:insert-into :files
-           :values (map (fn [path] {:id (gen-id!), :path path}) paths)}))
+           :columns [:id :name]
+           :values [[id name]]}))
 
 (defonce server (atom nil))
 
@@ -89,20 +85,21 @@
                           :enctype "multipart/form-data"}
                    (form/label "file" "file:")
                    (form/file-upload "file")
-                   (form/submit-button "send!")]]})}
+                   (form/submit-button "send!")]]})
+     ["c/" :link] (fn [{{:keys [link]} :route-params}]
+                    {:status 200, :body [:a {:href (str "/f/" link)} link]})}
+
+    ["f/" :link] (fn [{{:keys [link]} :route-params}]
+                   (event-hook-out! {:type :get-file :file link}))
 
     :post
     {"" (fn [request]
-          (let [params (get-in request [:params "file"])
-                name (:filename params)
-                size (:size params)]
-
-            (if (>= size MAX_SIZE)
-              {:status 200, :body "nunda"}
-              (let [contents (-> params :tempfile slurp)]
-                (println "---")
-                (pprint params)
-                (println (sha-256 contents))))))}}])
+          (let [params (get-in request [:params "file"])]
+            (event-hook-out!
+             {:type :file
+              :name (:filename params)
+              :size (:size params)
+              :content (:tempfile params)})))}}])
 
 (def app
   (-> routes
@@ -111,22 +108,54 @@
       wrap-multipart-params
       (pipe
        (fn [handler request]
-         (-> (handler request)
-             (update :body
-                     #(str
-                       (page/html5
-                        (page/include-css "https://cdn.jsdelivr.net/npm/holiday.css@0.11.6")
-                        %)))
-             (update :headers (partial merge {"Content-Type" "text/html"})))))))
+         (let [result (handler request)]
+           (if (not= (-> result :body type) clojure.lang.PersistentVector)
+             result
+             (-> result
+                 (update :body
+                         #(str
+                           (page/html5
+                               (page/include-css "https://cdn.jsdelivr.net/npm/holiday.css@0.11.6")
+                               %)))
+                 (update :headers (partial merge {"Content-Type" "text/html"})))))))))
 
-;; (def consumer
-;;   (go-loop []
-;;     (let [event (<! event-queue)]
-;;       (condp = (:type event)
-;;         :file
-;;         (let [{:keys []}])))
+(def consumer
+  (go-loop []
+    (let [event (<! event-queue)]
+      (pprint event)
 
-;;     (recur)))
+      (condp = (:type event)
+        :file
+        (let [{:keys [name size content out]} event]
+          (if (>= size MAX_SIZE)
+            {:status 200
+             :body "nunda"}
+            (let [file (slurp content)
+                  hash (sha-256 file)]
+              (spit (str "./files/" hash) file)
+              (db-insert-file! hash name)
+              (>!! out (->> hash (str "/c/") redirect)))))
+
+        :get-file
+        (let [{:keys [file out]} event
+              name (->>
+                    {:select :name
+                     :from :files
+                     :where [:= :id file]}
+                    sql/format
+                    (jdbc/query db-spec)
+                    first
+                    :name)]
+          (>!! out (if name
+                     (do
+                       {:status 200
+                        :headers {"Content-Type" "application/octet-stream"
+                                  "Content-Disposition" (str "attachment; filename=" name)}
+                        :body (->> file (str "./files/") slurp)})
+                     {:status 404, :body [:div
+                                          [:h1 "not found"]
+                                          [:pre file]]})))))
+    (recur)))
 
 (defn -main []
   (reset! server (run-jetty (wrap-reload #'app) {:port 8080 :join? false})))
