@@ -18,8 +18,7 @@
    [ring.middleware.multipart-params :refer [wrap-multipart-params]]
    [clojure.core.async :refer [chan <!! >!! <! go-loop close!]]
    [clojure.java.jdbc :as jdbc]
-   [honey.sql :as sql]
-   [honey.sql.helpers :as hsql]))
+   [honey.sql :as sql]))
 
 (def ID_SIZE 64) ;; sha-256
 (def MAX_SIZE 1024)
